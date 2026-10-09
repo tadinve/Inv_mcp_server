@@ -1,0 +1,8 @@
+{
+  "_comment": "TEST-ONLY policy for INVENTORY_AUTH_MODE=dev. Subjects are dev identities, not real principals.",
+  "principals": [
+    {"subject": "dev:reader", "permissions": ["inventory.read"]},
+    {"subject": "dev:writer", "permissions": ["inventory.read", "restock.create"]},
+    {"subject": "dev:no-access", "permissions": []}
+  ]
+}

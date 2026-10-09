@@ -1,0 +1,47 @@
+[project]
+name = "inventory-mcp"
+version = "0.1.0"
+description = "Secure MCP server reference implementation for synthetic Cresenta inventory data"
+requires-python = ">=3.13"
+dependencies = [
+    "google-auth>=2.40",
+    "mcp>=2.3,<3",
+    "pydantic>=2",
+    "uvicorn>=0.54.0",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[dependency-groups]
+dev = [
+    "anyio>=4.15.1",
+    "pytest>=9.1.1",
+    "pytest-asyncio>=1.4.0",
+    "ruff>=0.16.10",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/inventory_mcp"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+testpaths = ["tests"]
+markers = [
+    "integration: needs real Google Cloud credentials; not run by default",
+    "simulated_google_auth: locally generated RSA keys stand in for Google; NOT real Google authentication",
+]
+addopts = "-m 'not integration'"
+
+[tool.ruff]
+line-length = 120
+target-version = "py313"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP", "S", "ASYNC", "RUF"]
+ignore = ["S101"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["S", "B017"]

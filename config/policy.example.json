@@ -1,0 +1,7 @@
+{
+  "_comment": "Template for INVENTORY_AUTH_MODE=google. Subjects are service-account unique IDs (the 'sub' claim), from: gcloud iam service-accounts describe EMAIL --format='value(uniqueId)'. Never use emails here.",
+  "principals": [
+    {"subject": "REPLACE_WITH_MCP_READER_UNIQUE_ID", "permissions": ["inventory.read"]},
+    {"subject": "REPLACE_WITH_MCP_WRITER_UNIQUE_ID", "permissions": ["inventory.read", "restock.create"]}
+  ]
+}
