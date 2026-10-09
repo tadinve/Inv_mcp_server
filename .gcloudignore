@@ -1,0 +1,9 @@
+# Upload only the build inputs for `gcloud run deploy --source .` (see .dockerignore).
+*
+!Dockerfile
+!.dockerignore
+!pyproject.toml
+!uv.lock
+!src/
+!src/**
+src/**/__pycache__/

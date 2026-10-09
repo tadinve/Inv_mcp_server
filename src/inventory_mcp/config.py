@@ -56,16 +56,34 @@ def _guard_dev_mode(env: Mapping[str, str], host: str) -> None:
         )
 
 
+def _guard_host_validation(env: Mapping[str, str], host: str, allowed_hosts: tuple[str, ...]) -> None:
+    """Google mode off loopback (i.e. deployed) must pin the Host header.
+
+    Without INVENTORY_ALLOWED_HOSTS the SDK disables DNS-rebinding protection for
+    non-loopback binds, so require it rather than silently running without it.
+    """
+    deployed = host not in LOOPBACK_HOSTS or any(env.get(name) for name in CLOUD_RUN_ENV_MARKERS)
+    if deployed and not allowed_hosts:
+        raise ConfigError(
+            "INVENTORY_ALLOWED_HOSTS is required in google mode off loopback "
+            "(e.g. SERVICE-PROJECT_NUMBER.REGION.run.app)"
+        )
+    for allowed in allowed_hosts:
+        if "/" in allowed or " " in allowed or allowed == "*":
+            raise ConfigError(f"INVENTORY_ALLOWED_HOSTS entries must be bare host[:port] values; got {allowed!r}")
+
+
 @dataclass(frozen=True)
 class Settings:
     auth_mode: AuthMode
-    policy_path: Path
+    policy_path: Path | None
     db_path: Path
     host: str
     port: int
     allowed_hosts: tuple[str, ...]
     log_level: str
     oidc_audience: str | None = None
+    policy_json: str | None = None
 
     @classmethod
     def from_env(cls, env: Mapping[str, str] | None = None) -> Settings:
@@ -80,15 +98,19 @@ class Settings:
             ) from None
 
         host = env.get("INVENTORY_HOST", "127.0.0.1")
+        allowed_hosts = tuple(h.strip() for h in env.get("INVENTORY_ALLOWED_HOSTS", "").split(",") if h.strip())
         oidc_audience: str | None = None
         if auth_mode is AuthMode.DEV:
             _guard_dev_mode(env, host)
         else:
             oidc_audience = _validate_audience(env.get("INVENTORY_OIDC_AUDIENCE", ""))
+            _guard_host_validation(env, host, allowed_hosts)
 
-        policy = env.get("INVENTORY_POLICY_PATH", "").strip()
-        if not policy:
-            raise ConfigError("INVENTORY_POLICY_PATH is required (path to the permission policy JSON).")
+        # Exactly one policy source: a file (local) or inline JSON (Cloud Run env var).
+        policy_path = env.get("INVENTORY_POLICY_PATH", "").strip()
+        policy_json = env.get("INVENTORY_POLICY_JSON", "").strip()
+        if bool(policy_path) == bool(policy_json):
+            raise ConfigError("Set exactly one of INVENTORY_POLICY_PATH or INVENTORY_POLICY_JSON.")
 
         raw_port = env.get("PORT", "8000")
         try:
@@ -96,11 +118,10 @@ class Settings:
         except ValueError:
             raise ConfigError(f"PORT must be an integer; got {raw_port!r}") from None
 
-        allowed_hosts = tuple(h.strip() for h in env.get("INVENTORY_ALLOWED_HOSTS", "").split(",") if h.strip())
-
         return cls(
             auth_mode=auth_mode,
-            policy_path=Path(policy),
+            policy_path=Path(policy_path) if policy_path else None,
+            policy_json=policy_json or None,
             db_path=Path(env.get("INVENTORY_DB_PATH", "var/restock_requests.db")),
             host=host,
             port=port,

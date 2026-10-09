@@ -1,7 +1,7 @@
 # Cloud Run token-forwarding proof-of-concept
 
-**Status: prepared, NOT deployed.** Deploying and cleaning up both need owner
-approval (SPEC-AMENDMENT-1, A1.1).
+**Status: run on 2026-10-08. PASS.** See [RESULTS.md](RESULTS.md). Deploying and
+cleaning up both need owner approval (SPEC-AMENDMENT-1, A1.1).
 
 ## The question
 
@@ -29,7 +29,7 @@ token against the expected audience. It never returns or logs tokens or subjects
 
 | Resource | Purpose | Privileges |
 |---|---|---|
-| Cloud Run service `mcp-auth-poc` | The probe | Unauthenticated invocation disabled; max 1 instance, 256 MiB, 30 s timeout |
+| Cloud Run service `mcp-auth-poc` | The probe | Unauthenticated invocation disabled; scales to zero (min 0, max 1 instance), 256 MiB, 30 s timeout |
 | SA `mcp-poc-runtime` | Runtime identity of the service | **No roles** |
 | SA `mcp-poc-caller` | Test caller | `roles/run.invoker` on `mcp-auth-poc` only |
 | SA `mcp-poc-outsider` | Negative test caller | No invoker access |
@@ -65,11 +65,18 @@ error. Report it rather than granting broad roles.
 
 ## Commands (owner runs these; Claude Code does not)
 
+Project, region and operator come from your gcloud configuration by default:
+- `PROJECT_ID`: `$PROJECT_ID`, then `$GOOGLE_CLOUD_PROJECT`, `$CLOUDSDK_CORE_PROJECT`, then gcloud `core/project`.
+- `REGION`: `$REGION`, then `$CLOUDSDK_RUN_REGION`, then gcloud `run/region`, then `us-central1`.
+- `OPERATOR`: `$OPERATOR`, otherwise `user:` plus your gcloud account.
+
+Export any of them to override. Check the resolved values in the printed plan
+before you type the confirmation phrase.
+
 ```bash
 cd deployment/poc
-export PROJECT_ID=your-sandbox-project
-export REGION=us-central1
-export OPERATOR=user:you@example.com
+# optional overrides:
+# export PROJECT_ID=your-sandbox-project REGION=us-central1 OPERATOR=user:you@example.com
 
 ./deploy_poc.sh    # prints the full plan, then requires typing: deploy-poc
 ./probe_poc.sh     # read-only: mints tokens, runs probes A-F, prints status + PoC JSON (no tokens)
@@ -81,7 +88,7 @@ Probes:
 | | Request | Expected |
 |---|---|---|
 | A | Caller token in `Authorization` | 200, **`authorization.signature_verifies: true`** (the key question) |
-| B | Caller token in `X-Serverless-Authorization` | 200; signature expected to be stripped |
+| B | Caller token in `X-Serverless-Authorization` | 200; signature removed or replaced, does not verify (observed: replaced by a 27-character placeholder) |
 | C | No token | 401/403 from Cloud Run |
 | D | Outsider token (no invoker role) | 403 from Cloud Run |
 | E | Caller token, wrong audience | 401/403 from Cloud Run |

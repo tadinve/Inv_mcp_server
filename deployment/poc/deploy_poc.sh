@@ -25,8 +25,8 @@ IAM changes:
 
 Cloud Run service:
   name ${SERVICE}, built from ${SOURCE_DIR} via Cloud Build (--source)
-  --no-allow-unauthenticated, Invoker IAM check ON
-  --max-instances=1 --memory=256Mi --cpu=1 --timeout=30s --concurrency=10
+  --no-allow-unauthenticated, --invoker-iam-check (explicitly ON), ingress all, label purpose=mcp-auth-poc
+  --min-instances=0 (scales to zero when idle) --max-instances=1 --memory=256Mi --cpu=1 --timeout=30s --concurrency=10
   EXPECTED_AUDIENCE=${SERVICE_URL}
 
 Side effects of a --source deploy:
@@ -36,6 +36,7 @@ Expected cost: small (one short build, a few requests). Check current pricing.
 =======================================================================
 PLAN
 confirm "deploy-poc"
+assert_all_ours  # refuse to touch same-named resources we did not create
 
 set -x
 gcloud services enable run.googleapis.com cloudbuild.googleapis.com \
@@ -56,8 +57,11 @@ done
 gcloud run deploy "${SERVICE}" --project "${PROJECT_ID}" --region "${REGION}" \
   --source "${SOURCE_DIR}" \
   --no-allow-unauthenticated \
+  --invoker-iam-check \
+  --ingress all \
+  --labels purpose=mcp-auth-poc \
   --service-account "${RUNTIME_SA}" \
-  --max-instances 1 --memory 256Mi --cpu 1 --timeout 30 --concurrency 10 \
+  --min-instances 0 --max-instances 1 --memory 256Mi --cpu 1 --timeout 30 --concurrency 10 \
   --set-env-vars "EXPECTED_AUDIENCE=${SERVICE_URL}" \
   --quiet
 

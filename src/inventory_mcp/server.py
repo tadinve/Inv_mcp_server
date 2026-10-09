@@ -72,7 +72,10 @@ def create_app(
     authenticator: Authenticator | None = None,
 ) -> ASGIApp:
     inventory = inventory or InventoryService.from_package_data()
-    policy = policy or Policy.from_path(settings.policy_path)
+    if policy is None:
+        policy = (
+            Policy.from_json(settings.policy_json) if settings.policy_json else Policy.from_path(settings.policy_path)
+        )
     authenticator = authenticator or build_authenticator(settings)
     if repository is None:
         repository = RestockRepository(settings.db_path)

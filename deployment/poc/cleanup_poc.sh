@@ -2,7 +2,6 @@
 # Removes everything deploy_poc.sh created. Deletes cloud resources: run only with approval.
 source "$(dirname "$0")/common.sh"
 
-IMAGE_PATH="${REGION}-docker.pkg.dev/${PROJECT_ID}/cloud-run-source-deploy/${SERVICE}"
 
 cat <<PLAN
 ================ Token-forwarding PoC: cleanup plan ================
@@ -10,7 +9,7 @@ Project: ${PROJECT_ID}   Region: ${REGION}
 
 Will delete:
   - Cloud Run service ${SERVICE} (including its invoker binding)
-  - Container images under ${IMAGE_PATH}
+  - The ${SERVICE} image package in Artifact Registry repo cloud-run-source-deploy (other packages untouched)
   - Service accounts ${RUNTIME_SA},
     ${CALLER_SA}, ${OUTSIDER_SA}
     (deleting them also removes the operator's Token Creator bindings on them)
@@ -22,10 +21,12 @@ Will NOT touch (shared; may be used by other workloads):
 ====================================================================
 PLAN
 confirm "delete-poc"
+assert_all_ours  # refuse to touch same-named resources we did not create
 
 set -x
 gcloud run services delete "${SERVICE}" --project "${PROJECT_ID}" --region "${REGION}" --quiet || true
-gcloud artifacts docker images delete "${IMAGE_PATH}" --project "${PROJECT_ID}" --delete-tags --quiet || true
+gcloud artifacts packages delete "${SERVICE}" --repository cloud-run-source-deploy --location "${REGION}" \
+  --project "${PROJECT_ID}" --quiet || true
 for sa in "${RUNTIME_SA}" "${CALLER_SA}" "${OUTSIDER_SA}"; do
   gcloud iam service-accounts delete "${sa}" --project "${PROJECT_ID}" --quiet || true
 done

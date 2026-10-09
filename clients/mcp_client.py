@@ -5,6 +5,10 @@ Usage:
     uv run python clients/mcp_client.py tools --token dev:reader
     uv run python clients/mcp_client.py call get_inventory '{"product_id": "CRS-1002"}' --token dev:reader
 
+Against Cloud Run, mint a real Google ID token by impersonation (keeps it off the command line):
+    uv run python clients/mcp_client.py demo --url https://SERVICE-NUMBER.REGION.run.app/mcp \
+        --impersonate mcp-writer@PROJECT.iam.gserviceaccount.com
+
 The bearer token can also come from MCP_BEARER_TOKEN; the URL from MCP_SERVER_URL.
 """
 
@@ -22,6 +26,11 @@ import httpx2
 from mcp import Client, MCPError
 from mcp.client.streamable_http import streamable_http_client
 from mcp.types import CallToolResult
+
+try:  # works both as `python clients/mcp_client.py` and as `clients.mcp_client`
+    from clients.gcloud_identity import IdentityTokenError, audience_for, mint_identity_token
+except ModuleNotFoundError:
+    from gcloud_identity import IdentityTokenError, audience_for, mint_identity_token  # type: ignore[no-redef]
 
 DEFAULT_URL = "http://127.0.0.1:8000/mcp"
 
@@ -107,8 +116,15 @@ async def demo(client: Client) -> None:
 
 
 async def run(args: argparse.Namespace) -> int:
+    token = args.token
+    if args.impersonate:
+        try:
+            token = mint_identity_token(args.impersonate, args.audience or audience_for(args.url))
+        except IdentityTokenError as exc:
+            print(f"Token error: {exc}", file=sys.stderr)
+            return 1
     try:
-        async with connect(args.url, args.token) as client:
+        async with connect(args.url, token) as client:
             if args.command == "tools":
                 await show_session(client)
                 await show_tools(client)
@@ -138,6 +154,8 @@ def main() -> int:
     common = argparse.ArgumentParser(add_help=False)
     common.add_argument("--url", default=os.environ.get("MCP_SERVER_URL", DEFAULT_URL))
     common.add_argument("--token", default=os.environ.get("MCP_BEARER_TOKEN"))
+    common.add_argument("--impersonate", metavar="SERVICE_ACCOUNT", help="mint a Google ID token for this account")
+    common.add_argument("--audience", help="token audience (default: scheme://host of --url)")
     parser = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter, parents=[common]
     )

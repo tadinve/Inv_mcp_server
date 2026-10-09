@@ -171,3 +171,19 @@ def test_health_endpoint_is_public_and_minimal(live_server: LiveServer) -> None:
 def test_healthz_is_not_served(live_server: LiveServer) -> None:
     response = httpx2.get(f"{live_server.base_url}/healthz", headers={"Authorization": "Bearer dev:reader"})
     assert response.status_code == 404
+
+
+async def test_rejected_arguments_are_logged_with_caller_but_without_values(
+    live_server: LiveServer, caplog: pytest.LogCaptureFixture
+) -> None:
+    secret = "LOGGED-VALUE-MUST-NOT-APPEAR-5521"
+    with caplog.at_level("INFO", logger="inventory_mcp.tools"):
+        async with mcp_session(live_server, "dev:reader") as client:
+            await client.call_tool("get_inventory", {"product_id": secret})
+    records = [r for r in caplog.records if getattr(r, "fields", {}).get("outcome") == "invalid_arguments"]
+    assert records, "expected a structured invalid_arguments log line"
+    fields = records[-1].fields
+    assert fields["principal"] == "dev-reader"
+    assert fields["correlation_id"]
+    assert fields["invalid_fields"] == ["product_id"]
+    assert secret not in caplog.text

@@ -1,0 +1,6 @@
+# Allowlist: only what the image needs. Keeps .env, var/, *.db, .venv, tests and docs out.
+*
+!pyproject.toml
+!uv.lock
+!src/
+src/**/__pycache__/

@@ -43,10 +43,53 @@ def test_dev_auth_allowed_on_loopback(host: str) -> None:
     assert Settings.from_env({**DEV, "INVENTORY_HOST": host}).auth_mode is AuthMode.DEV
 
 
+HOST = "cresenta-inventory-123456789012.us-central1.run.app"
+
+
 def test_google_mode_is_allowed_on_cloud_run() -> None:
-    settings = Settings.from_env({**GOOGLE, "K_SERVICE": "cresenta-inventory", "INVENTORY_HOST": "0.0.0.0"})
+    settings = Settings.from_env(
+        {**GOOGLE, "K_SERVICE": "cresenta-inventory", "INVENTORY_HOST": "0.0.0.0", "INVENTORY_ALLOWED_HOSTS": HOST}
+    )
     assert settings.auth_mode is AuthMode.GOOGLE
     assert settings.oidc_audience == AUDIENCE
+    assert settings.allowed_hosts == (HOST,)
+
+
+@pytest.mark.parametrize(
+    "extra",
+    [{"INVENTORY_HOST": "0.0.0.0"}, {"K_SERVICE": "cresenta-inventory"}],
+    ids=["non-loopback-bind", "cloud-run-marker"],
+)
+def test_google_mode_deployed_without_allowed_hosts_is_refused(extra: dict[str, str]) -> None:
+    with pytest.raises(ConfigError, match="INVENTORY_ALLOWED_HOSTS"):
+        Settings.from_env({**GOOGLE, **extra})
+
+
+@pytest.mark.parametrize("hosts", ["*", "https://x.run.app", "x.run.app/mcp", "a b"])
+def test_allowed_hosts_must_be_bare_hosts(hosts: str) -> None:
+    with pytest.raises(ConfigError, match="bare host"):
+        Settings.from_env({**GOOGLE, "INVENTORY_HOST": "0.0.0.0", "INVENTORY_ALLOWED_HOSTS": hosts})
+
+
+def test_google_mode_on_loopback_does_not_require_allowed_hosts() -> None:
+    assert Settings.from_env(GOOGLE).allowed_hosts == ()
+
+
+def test_policy_may_come_from_inline_json() -> None:
+    env = {k: v for k, v in DEV.items() if k != "INVENTORY_POLICY_PATH"}
+    settings = Settings.from_env({**env, "INVENTORY_POLICY_JSON": '{"principals": []}'})
+    assert settings.policy_path is None
+    assert settings.policy_json == '{"principals": []}'
+
+
+@pytest.mark.parametrize(
+    "policy_env",
+    [{}, {"INVENTORY_POLICY_PATH": "p.json", "INVENTORY_POLICY_JSON": '{"principals": []}'}],
+    ids=["neither", "both"],
+)
+def test_exactly_one_policy_source_is_required(policy_env: dict[str, str]) -> None:
+    with pytest.raises(ConfigError, match="exactly one"):
+        Settings.from_env({"INVENTORY_AUTH_MODE": "dev", **policy_env})
 
 
 @pytest.mark.parametrize(

@@ -19,17 +19,20 @@ it, including AI assistants.
 | Checkpoint | Scope | State |
 |---|---|---|
 | 1. MCP fundamentals | Five tools, synthetic data, deterministic logic, standalone client, tests | **Done** (local) |
-| 2. Application security | Google OIDC verification, `K_SERVICE` guard, simulated adversarial tests, Cloud Run token PoC | **Code done locally; PoC prepared, not deployed** |
-| 3. Containers + Cloud Run | Dockerfile, IAM-protected deployment, real Cloud Run tests | Not started |
+| 2. Application security | Google OIDC verification, `K_SERVICE` guard, simulated adversarial tests, Cloud Run token PoC | **Done.** Cloud Run token PoC passed ([results](deployment/poc/RESULTS.md)) |
+| 3. Containers + Cloud Run | Dockerfile, IAM-protected deployment, real Cloud Run tests | **Done.** 15/15 real-identity tests passed on Cloud Run ([results](deployment/RESULTS.md), [runbook](deployment/README.md)) |
 | 4. Portfolio readiness | Architecture docs, CI, threat model, diagrams | Not started |
 
 Two authentication modes exist:
 - `google`: verifies Google-signed OIDC ID tokens in-process. This is the deployed design.
 - `dev`: **TEST-ONLY**, and refused on Cloud Run.
 
-Google mode is tested locally only, with **simulated** keys. Whether Cloud Run
-forwards the signed token intact is unverified until the PoC in
-[deployment/poc/](deployment/poc/README.md) runs.
+Google mode's verifier logic is tested locally with **simulated** keys. A
+Cloud Run proof-of-concept with real Google tokens confirmed that the signed
+`Authorization` token reaches the container intact and verifies
+([results](deployment/poc/RESULTS.md)). The MCP server itself then passed 15/15
+integration tests on Cloud Run with real Google identities
+([results](deployment/RESULTS.md)).
 
 ## Tools
 
@@ -149,6 +152,22 @@ and [tests/test_authorization.py](tests/test_authorization.py):
 in discovery does not authorize calling it.** Permissions are checked on every
 call, before any business logic or database access.
 
+## Run in a container
+
+```bash
+docker build -t cresenta-inventory:local .
+# Local container in TEST-ONLY dev mode (the override is required because containers bind 0.0.0.0):
+docker run --rm -p 127.0.0.1:8080:8080 -e PORT=8080 -e INVENTORY_AUTH_MODE=dev \
+  -e INVENTORY_DEV_ALLOW_NON_LOOPBACK=true -e INVENTORY_POLICY_JSON="$(cat config/policy.dev.json)" \
+  cresenta-inventory:local
+uv run python clients/mcp_client.py demo --url http://127.0.0.1:8080/mcp --token dev:writer
+```
+
+The image runs as a non-root user (uid 10001) with production dependencies only.
+It refuses to start in dev mode if a Cloud Run marker is set. In Google mode it
+refuses to start without an https audience, or without `INVENTORY_ALLOWED_HOSTS`
+when bound off loopback.
+
 ## Tests
 
 ```bash
@@ -169,8 +188,8 @@ Run IAM are exercised only by the opt-in PoC in `deployment/poc/`, and later by
 
 ## Known limitations (so far)
 
-- Google OIDC verification is tested only with simulated keys. Cloud Run's
-  forwarding of the signed token is unverified until the PoC runs. See
+- Deployed and verified once, on a temporary lab project (2026-10-08). The
+  deployment is a demonstration: one instance, ephemeral SQLite. See
   [architecture/threat-model.md](architecture/threat-model.md).
 - SQLite is local storage. On Cloud Run it will be ephemeral demo storage
   (`--max-instances=1`), not durable. Firestore is the documented production
@@ -187,7 +206,8 @@ src/inventory_mcp/   server.py (assembly) · tools.py (MCP handlers) · inventor
                      config.py · observability.py · data/inventory.json (synthetic catalog)
 clients/             mcp_client.py (standalone MCP client, no LLM)
 config/              policy.dev.json (TEST-ONLY) · policy.example.json (Google mode template)
-deployment/poc/      Cloud Run token-forwarding proof-of-concept (opt-in, not deployed)
+deployment/          Cloud Run deploy / verify / demo / cleanup scripts (opt-in) · tools/ (verify helpers)
+deployment/poc/      Cloud Run token-forwarding proof-of-concept (ran 2026-10-08: PASS)
 architecture/        threat-model.md
 tests/               logic · persistence · protocol · tool calls · authorization · configuration ·
                      google_oidc_simulated

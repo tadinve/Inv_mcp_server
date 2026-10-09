@@ -157,15 +157,19 @@ class ArgumentValidationMiddleware:
         except ValidationError as exc:
             known = set(tool.parameters.get("properties", {}))
             problems = sorted({(_field_name(err["loc"], known), err["type"]) for err in exc.errors()})
+            scope = getattr(ctx.request, "scope", None) or {}
+            principal: Principal | None = scope.get(PRINCIPAL_SCOPE_KEY)
             logger.info(
                 f"{tool.name} rejected arguments",
                 extra={
                     "fields": {
                         "event": "tool_call",
                         "tool": tool.name,
+                        "correlation_id": scope.get(CORRELATION_SCOPE_KEY),
+                        "principal": principal.label if principal else None,
                         "outcome": "invalid_arguments",
                         "error_category": "invalid_argument",
-                        "fields": [f for f, _ in problems],
+                        "invalid_fields": [f for f, _ in problems],
                     }
                 },
             )
