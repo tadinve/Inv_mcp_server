@@ -1,0 +1,80 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Lint and local tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        with:
+          version: "0.6.11"
+          python-version: "3.13"
+          enable-cache: true
+
+      - name: Install locked dependencies
+        run: uv sync --locked
+
+      - name: Ruff lint
+        run: uv run ruff check .
+
+      - name: Ruff format check
+        run: uv run ruff format --check .
+
+      - name: Local tests (unit, live-HTTP MCP, simulated Google tokens, script audit)
+        # The `integration` marker is excluded by pyproject's addopts. Those tests need real
+        # GCP credentials and a deployed service; they report "NOT RUN" here, never "passed".
+        run: uv run pytest -rs
+
+      - name: Cloud integration tests are not run in CI
+        run: |
+          echo "::notice title=Integration tests NOT RUN::tests/integration requires GCP credentials and a deployed Cloud Run service. Run deployment/verify_cloud_run.sh manually; see demo/expected-results.md for recorded results."
+
+  container:
+    name: Container builds
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Build image (not pushed)
+        run: docker build --tag cresenta-inventory:ci .
+      - name: Image runs as non-root and refuses unsafe dev mode
+        run: |
+          test "$(docker image inspect cresenta-inventory:ci --format '{{.Config.User}}')" = "app"
+          set +e
+          docker run --rm -e INVENTORY_AUTH_MODE=dev -e INVENTORY_POLICY_JSON='{"principals":[]}' \
+            -e K_SERVICE=ci cresenta-inventory:ci
+          code=$?
+          set -e
+          test "$code" -eq 2
+
+  secrets:
+    name: Secret scan (full history)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: gitleaks
+        # Reviewed historical test fixtures are listed in .gitleaksignore.
+        run: docker run --rm -v "$PWD:/repo" ghcr.io/gitleaks/gitleaks:v8.30.1 git /repo --redact --no-banner

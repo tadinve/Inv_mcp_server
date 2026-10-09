@@ -1,217 +1,236 @@
-# secure-mcp-server-gcp
+# Secure MCP Server on Google Cloud
 
-> Cresenta needs enterprise applications and AI assistants to read inventory
-> safely, while only specifically authorized callers can initiate restock
-> requests.
+[![CI](https://github.com/tadinve/Inv_mcp_server/actions/workflows/ci.yml/badge.svg)](https://github.com/tadinve/Inv_mcp_server/actions/workflows/ci.yml)
 
-A standalone [Model Context Protocol](https://modelcontextprotocol.io) server,
-written in Python with the official MCP SDK. It exposes inventory tools for
-**Cresenta**, a fictional company with synthetic data, and separates *who
-the caller is* (authentication) from *what they may do* (authorization for
-each tool).
+**Cresenta needs enterprise applications and AI assistants to read inventory
+safely, while only specifically authorized callers can initiate restock
+requests.**
 
-This is an **educational reference implementation**, not a production-certified
-service. The server contains no AI agent and no LLM. Any MCP client can consume
-it, including AI assistants.
+Cresenta (a fictional company) runs three distribution centers. Planning tools and AI
+assistants need live answers to two questions: *what's on hand* and *what needs
+reordering*. A restock request is different: it starts a purchasing process, so
+only specific, accountable callers may create one, and a network retry must never
+create two.
 
-## Status
+This repository is a standalone [Model Context Protocol](https://modelcontextprotocol.io)
+(MCP) server that serves exactly that. It has five typed tools over Streamable
+HTTP, deployed on Cloud Run behind Google Cloud IAM, with per-tool permissions
+checked against each caller's **verified** Google identity.
 
-| Checkpoint | Scope | State |
+> **Scope.** An educational reference implementation with synthetic data, not a
+> production-certified service. It contains no AI agent, no LLM and no agent
+> framework. Any MCP client, including AI assistants, can consume it.
+
+## Tool catalog
+
+| Tool | Permission | What it does |
 |---|---|---|
-| 1. MCP fundamentals | Five tools, synthetic data, deterministic logic, standalone client, tests | **Done** (local) |
-| 2. Application security | Google OIDC verification, `K_SERVICE` guard, simulated adversarial tests, Cloud Run token PoC | **Done.** Cloud Run token PoC passed ([results](deployment/poc/RESULTS.md)) |
-| 3. Containers + Cloud Run | Dockerfile, IAM-protected deployment, real Cloud Run tests | **Done.** 15/15 real-identity tests passed on Cloud Run ([results](deployment/RESULTS.md), [runbook](deployment/README.md)) |
-| 4. Portfolio readiness | Architecture docs, CI, threat model, diagrams | Not started |
-
-Two authentication modes exist:
-- `google`: verifies Google-signed OIDC ID tokens in-process. This is the deployed design.
-- `dev`: **TEST-ONLY**, and refused on Cloud Run.
-
-Google mode's verifier logic is tested locally with **simulated** keys. A
-Cloud Run proof-of-concept with real Google tokens confirmed that the signed
-`Authorization` token reaches the container intact and verifies
-([results](deployment/poc/RESULTS.md)). The MCP server itself then passed 15/15
-integration tests on Cloud Run with real Google identities
-([results](deployment/RESULTS.md)).
-
-## Tools
-
-| Tool | Permission | Purpose |
-|---|---|---|
-| `get_inventory` | `inventory.read` | Stock for one product across all warehouses |
-| `get_reorder_status` | `inventory.read` | Whether to reorder, and how much |
+| `get_inventory` | `inventory.read` | Stock for a product across all warehouses; cost in integer minor units |
+| `get_reorder_status` | `inventory.read` | Whether to reorder, and how much (`target = 2 × reorder_point`) |
 | `list_low_stock_items` | `inventory.read` | Products below their reorder point, largest shortfall first |
 | `list_restock_requests` | `inventory.read` | The caller's own restock requests |
-| `create_restock_request` | `restock.create` | Record a restock *request* for human review. Never places an order |
+| `create_restock_request` | `restock.create` | Records a request **for human review**; never places an order. Requires a UUID `idempotency_key`: retries replay, and conflicting reuse is rejected |
 
 Every tool publishes typed input and output JSON Schemas generated from Pydantic
-models. Money is in integer minor units (`unit_cost_minor`, `currency`).
+models. The business logic is deterministic Python; no model computes anything.
 
-**Reorder formula**
+## Architecture
 
+```mermaid
+flowchart LR
+    C["MCP client"] -- "HTTPS + Google ID token" --> IAM["Cloud Run IAM<br/>run.invoker + audience"]
+    IAM -- "original signed token" --> AUTHN["Re-verify token in app<br/>signature, iss, aud, exp, sub"]
+    AUTHN --> MCP["MCP Streamable HTTP<br/>stateless, Host-pinned"]
+    MCP --> AUTHZ["Per-tool authorization<br/>policy by verified sub"]
+    AUTHZ --> TOOLS["Deterministic tools"]
+    TOOLS --> DB[("SQLite<br/>ephemeral")]
+    IAM -. "403 / 401" .-> C
+    AUTHN -. "401" .-> C
+    AUTHZ -. "isError: forbidden" .-> C
 ```
-target_level     = 2 × reorder_point
-reorder_required = on_hand < reorder_point
-recommended      = max(0, target_level − on_hand) if reorder_required else 0
-```
 
-**Idempotency.** `create_restock_request` requires a UUID `idempotency_key`.
-Requests are unique per `(caller subject, key)`:
-- An identical retry returns the original request with `idempotent_replay: true`.
-- Reusing a key with different details returns an `idempotency_conflict` error.
-- Concurrent duplicates are stored exactly once.
+There are two independent boundaries:
+- **Cloud Run IAM** decides who may *reach* the service.
+- **The application** re-verifies the same Google-signed token and decides what
+  each caller may *do*, per tool, from the token's verified `sub`.
 
-## Run locally
+The full design and engineering decisions are in
+[architecture/system-design.md](architecture/system-design.md).
 
-Requires Python 3.13+ and [uv](https://docs.astral.sh/uv/).
+## Quick start (local, about 2 minutes)
+
+Requires Python 3.13+ and [uv](https://docs.astral.sh/uv/). No cloud account is
+needed.
 
 ```bash
-uv sync
-INVENTORY_AUTH_MODE=dev INVENTORY_POLICY_PATH=config/policy.dev.json \
-  uv run python -m inventory_mcp
-# serves MCP at http://127.0.0.1:8000/mcp and GET /health
+git clone https://github.com/tadinve/Inv_mcp_server.git
+cd Inv_mcp_server
+uv sync --locked
+uv run pytest
 ```
 
-In another terminal:
+Start the server (terminal 1):
 
 ```bash
-uv run python clients/mcp_client.py demo  --token dev:writer   # exercise every tool
-uv run python clients/mcp_client.py tools --token dev:reader   # list tools and schemas
-uv run python clients/mcp_client.py call create_restock_request \
-  '{"product_id":"CRS-1002","quantity":5,"justification":"Reader tries to write","idempotency_key":"6f1c1f1e-1111-4a4a-9b9b-000000000001"}' \
-  --token dev:reader                                             # -> forbidden
+INVENTORY_AUTH_MODE=dev INVENTORY_POLICY_PATH=config/policy.dev.json uv run python -m inventory_mcp
 ```
 
-**MCP Inspector:** run `npx @modelcontextprotocol/inspector` and connect with
-transport *Streamable HTTP* to `http://127.0.0.1:8000/mcp`. Add **one** custom
-header: name `Authorization`, value `Bearer dev:reader`, all in the value field.
-Then reconnect. If the header is missing or malformed, the server returns 401
-and the Inspector falls back to MCP OAuth discovery (`/.well-known/...`,
-`/register`). Those requests also return 401, because MCP OAuth is out of scope.
-
-### Google authentication (deployed mode)
+Use the standalone client (terminal 2):
 
 ```bash
-INVENTORY_AUTH_MODE=google \
-INVENTORY_OIDC_AUDIENCE=https://SERVICE-PROJECT_NUMBER.REGION.run.app \
-INVENTORY_POLICY_PATH=policy.json uv run python -m inventory_mcp
+uv run python clients/mcp_client.py demo --token dev:writer
+uv run python clients/mcp_client.py tools --token dev:reader
 ```
 
-The server checks each token's signature against Google's published
-certificates (cached, with rotation handled). It accepts only RS256 tokens with
-a `kid`, and requires:
-- issuer `accounts.google.com`;
-- an audience exactly equal to `INVENTORY_OIDC_AUDIENCE`;
-- a valid `iat`/`exp`;
-- a non-empty `sub`.
+`demo` discovers the tools and calls each one, including an unknown product, an
+invalid argument, a create, an idempotent replay and a conflicting reuse.
+[demo/walkthrough.md](demo/walkthrough.md) has the full reader/writer story.
 
-Permissions are looked up by `sub`, the service account's unique ID, never by
-email. See [config/policy.example.json](config/policy.example.json).
+> **Dev authentication is TEST-ONLY.** `Bearer dev:<name>` is accepted without
+> verification so the MCP surface can be explored locally. The server refuses to
+> start in dev mode on Cloud Run, or on a non-loopback address without an explicit
+> override. Permissions still come only from the server-side policy
+> ([config/policy.dev.json](config/policy.dev.json)): `dev:reader` can read,
+> `dev:writer` can also create, and every other identity gets nothing.
 
-### Dev authentication is TEST-ONLY
+**MCP Inspector:** run `npx @modelcontextprotocol/inspector` and choose transport
+*Streamable HTTP* with URL `http://127.0.0.1:8000/mcp`. Add one header: name
+`Authorization`, value `Bearer dev:reader`.
 
-With `INVENTORY_AUTH_MODE=dev`, the bearer token `dev:<name>` authenticates as
-subject `dev:<name>` **without verification**. Anyone who can reach the port can
-claim any dev identity. Startup is refused when a Cloud Run marker (`K_SERVICE`,
-`K_REVISION`, `K_CONFIGURATION`) is set. It is also refused when binding to a
-non-loopback address, unless `INVENTORY_DEV_ALLOW_NON_LOOPBACK=true` is set
-explicitly for a local container. Permissions still come only from the server-side policy
-([config/policy.dev.json](config/policy.dev.json)):
-
-| Token | Permissions |
-|---|---|
-| `dev:reader` | `inventory.read` |
-| `dev:writer` | `inventory.read`, `restock.create` |
-| `dev:no-access` | none |
-| anything else matching `dev:<name>` | none (deny by default) |
-
-## Protocol behavior (measured, mcp SDK 2.3.0)
-
-- **Transport:** Streamable HTTP at `/mcp`, stateless, JSON responses (no SSE
-  sessions), so no session affinity is needed.
-- **Version negotiation:** the SDK client negotiates protocol **2026-07-28** via
-  `server/discover` by default. The pre-2026 `initialize` handshake
-  (**2025-11-25**) also works and is tested.
-
-What each failure looks like is tested in [tests/test_protocol.py](tests/test_protocol.py)
-and [tests/test_authorization.py](tests/test_authorization.py):
-
-| Situation | Response |
-|---|---|
-| Malformed JSON body | HTTP 400, JSON-RPC `-32700` parse error |
-| Structurally invalid JSON-RPC | HTTP 400, JSON-RPC error |
-| Missing or invalid bearer token (forged, expired, wrong audience or issuer, non-RS256, unknown key) | HTTP 401 `{"error":"unauthenticated"}` from our middleware; MCP never runs |
-| Arguments violate the input schema | Tool result `isError: true`, `{"error":{"code":"invalid_argument","message":"… (field: error_type)"}}`. The SDK reports this as a tool error, not a JSON-RPC error. Our middleware replaces the SDK's text, which echoed submitted values, with field names and error types only |
-| Unknown tool name | Tool result `isError: true`, `Unknown tool: …` (**SDK behavior**: not JSON-RPC `-32602`) |
-| Unknown product | `isError: true`, `{"error":{"code":"not_found",…}}` |
-| Business validation failure | `isError: true`, `{"error":{"code":"invalid_argument",…}}` |
-| Idempotency key reused with different details | `isError: true`, `{"error":{"code":"idempotency_conflict",…}}` |
-| Authenticated caller lacks permission | `isError: true`, `{"error":{"code":"forbidden",…}}`, no side effects |
-
-`tools/list` shows all five tools to every authenticated caller. **Seeing a tool
-in discovery does not authorize calling it.** Permissions are checked on every
-call, before any business logic or database access.
-
-## Run in a container
+**Container:**
 
 ```bash
 docker build -t cresenta-inventory:local .
-# Local container in TEST-ONLY dev mode (the override is required because containers bind 0.0.0.0):
 docker run --rm -p 127.0.0.1:8080:8080 -e PORT=8080 -e INVENTORY_AUTH_MODE=dev \
   -e INVENTORY_DEV_ALLOW_NON_LOOPBACK=true -e INVENTORY_POLICY_JSON="$(cat config/policy.dev.json)" \
   cresenta-inventory:local
-uv run python clients/mcp_client.py demo --url http://127.0.0.1:8080/mcp --token dev:writer
 ```
 
-The image runs as a non-root user (uid 10001) with production dependencies only.
-It refuses to start in dev mode if a Cloud Run marker is set. In Google mode it
-refuses to start without an https audience, or without `INVENTORY_ALLOWED_HOSTS`
-when bound off loopback.
+## Deploying to Cloud Run
 
-## Tests
+[deployment/README.md](deployment/README.md) lists the resources, IAM, cost and
+safety guarantees. In short:
 
 ```bash
-uv run pytest        # everything that runs locally
-uv run pytest -m simulated_google_auth   # only the simulated Google-token tests
-uv run ruff check . && uv run ruff format --check .
+./deployment/deploy_cloud_run.sh
+./deployment/verify_cloud_run.sh
+./deployment/demo_cloud_run.sh
+./deployment/cleanup.sh
 ```
 
-The MCP tests start a real uvicorn server on a free localhost port and use the
-official SDK client over HTTP.
+Each script prints its plan with the resolved project, region and operator, and
+asks for a typed confirmation before changing anything.
 
-**Simulated vs. real Google authentication.** The tests in
-`tests/test_google_oidc_simulated.py` sign tokens with RSA keys generated at
-test time, standing in for Google's keys. They prove the application's verifier
-logic. They are **not** real Google authentication tests. Real tokens and Cloud
-Run IAM are exercised only by the opt-in PoC in `deployment/poc/`, and later by
-`integration`-marked tests, which are excluded by default. None have run yet.
+The deployment creates:
+- a private service with the invoker IAM check enabled, scaling 0 to 1 instances;
+- a runtime service account with no roles;
+- three test identities: `mcp-reader` and `mcp-writer` with invoker access, and
+  `mcp-outsider` with none.
 
-## Known limitations (so far)
+No service-account keys are created; test tokens are minted by impersonation. The
+scripts only touch resources they created, and a test suite audits them for that.
 
-- Deployed and verified once, on a temporary lab project (2026-10-08). The
-  deployment is a demonstration: one instance, ephemeral SQLite. See
-  [architecture/threat-model.md](architecture/threat-model.md).
-- SQLite is local storage. On Cloud Run it will be ephemeral demo storage
-  (`--max-instances=1`), not durable. Firestore is the documented production
-  alternative.
-- This project does **not** implement MCP-native OAuth (authorization-server
-  discovery, Protected Resource Metadata). It is designed for service-to-service
-  callers on Google Cloud.
+## Security model
+
+| Layer | Mechanism | Failure |
+|---|---|---|
+| Edge | Cloud Run IAM `roles/run.invoker`; private invocation | 403 / 401 from Cloud Run |
+| Authentication | App re-verifies the Google ID token: RS256 + `kid`, signature against Google's certificates, issuer, exact audience, `iat`/`exp`, non-empty `sub` | HTTP 401 `{"error":"unauthenticated"}`; MCP never runs |
+| Host pinning | Only the configured service hostname reaches MCP | HTTP 421 |
+| Argument validation | Schema check with sanitized errors (field names only, never values) | `isError: invalid_argument` |
+| Authorization | Policy maps verified `sub` → permissions; deny by default; checked on **every** call before any logic or DB access | `isError: forbidden`, no side effects |
+| Idempotency | `UNIQUE (caller sub, key)` + payload fingerprint, atomic transaction | Replay returns the original; a mismatch gives `idempotency_conflict` |
+| Logging | Structured JSON: tool, verified principal label, allow/deny, outcome, latency | Tokens and argument values are never logged |
+
+Key decisions, each with its trade-off, are in
+[system-design.md](architecture/system-design.md#engineering-decisions):
+- stateless Streamable HTTP;
+- Google IAM/OIDC instead of MCP OAuth;
+- re-verifying the token in-app;
+- `sub` instead of email as the identity;
+- per-tool permissions;
+- ephemeral SQLite.
+
+Threats, mitigations and residual risks are in
+[architecture/threat-model.md](architecture/threat-model.md).
+
+## Test evidence
+
+| Kind | Result | Where |
+|---|---|---|
+| Local: unit, live-HTTP MCP, persistence with real threads, config guards, script audit | **197 passed** | `uv run pytest` (CI) |
+| Simulated Google tokens: production verifier, locally generated RSA keys | **46 passed** | `uv run pytest -m simulated_google_auth` (CI) |
+| Live Google identity, Checkpoint 2: Cloud Run token-forwarding PoC | **6/6 probes passed** | [deployment/poc/RESULTS.md](deployment/poc/RESULTS.md) |
+| Live Google identity, Checkpoint 3: deployed server, real reader/writer/outsider | **15/15 integration tests passed**; `sub == uniqueId` 3/3; 0 tokens in 150 log entries | [deployment/RESULTS.md](deployment/RESULTS.md) |
+
+Simulated tests prove the verifier's *logic*. They are not real Google
+authentication, and they are labeled and marked as such. The live tests need GCP
+credentials, never run in CI, and are reported as NOT RUN when skipped. The
+complete breakdown, including what is **not yet validated**, is in
+[demo/expected-results.md](demo/expected-results.md).
+
+Highlights from the live run:
+- A reader's write was `forbidden` and changed nothing.
+- A writer's retry returned the same `request_id`.
+- 8 concurrent identical submissions were stored once.
+- A token sent only in `X-Serverless-Authorization` was admitted by Cloud Run
+  but refused by the app, because Cloud Run strips its signature.
+- Requests to the service's second hostname got 421.
+
+## Protocol notes (mcp SDK 2.3.0, measured)
+
+- The SDK client negotiates protocol **2026-07-28** via `server/discover`. The
+  `initialize` handshake (**2025-11-25**) also works.
+- Malformed JSON gets HTTP 400 with JSON-RPC `-32700`.
+- Invalid arguments and unknown tools come back as tool results with
+  `isError: true`, not JSON-RPC errors. This follows the SDK.
+- `tools/list` shows all five tools to authenticated callers. **Discovery is not
+  an authorization grant.**
+
+### Why MCP, and how to consume it
+
+MCP gives AI assistants and applications one standard way to *discover* tools
+with machine-readable schemas and *call* them. A REST API would need a bespoke
+client and documentation for each consumer. Any MCP client that supports
+Streamable HTTP and a custom `Authorization` header can use this server: send a
+Google ID token whose audience is the service URL, for an identity the policy
+grants.
+
+## Limitations
+
+- **Not durable.** SQLite lives in `/tmp` on one instance. Data is lost on scale
+  to zero or redeploy, and idempotency guarantees go with it. Firestore is the
+  documented production path (not implemented).
+- **One instance.** `--max-instances=1` is what keeps SQLite consistent; it is not
+  a scaling design.
+- **No MCP OAuth.** There is no authorization-server discovery, Protected Resource
+  Metadata or consent flow. General-purpose MCP clients that expect OAuth need
+  extra work. The server does not claim MCP OAuth compliance.
+- **No rate limiting.** A stolen valid token works until it expires (up to 1 hour).
+- **Verified once live**, on a temporary lab project in one region (2026-10-08).
 
 ## Repository layout
 
 ```
-src/inventory_mcp/   server.py (assembly) · tools.py (MCP handlers) · inventory_service.py (logic)
-                     repository.py (SQLite) · authentication.py · authorization.py · schemas.py
-                     config.py · observability.py · data/inventory.json (synthetic catalog)
-clients/             mcp_client.py (standalone MCP client, no LLM)
+src/inventory_mcp/   server · tools · inventory_service · repository · authentication · authorization
+                     schemas · config · observability · data/inventory.json (synthetic catalog)
+clients/             mcp_client.py (standalone MCP client, no LLM) · gcloud_identity.py (token minting)
 config/              policy.dev.json (TEST-ONLY) · policy.example.json (Google mode template)
-deployment/          Cloud Run deploy / verify / demo / cleanup scripts (opt-in) · tools/ (verify helpers)
-deployment/poc/      Cloud Run token-forwarding proof-of-concept (ran 2026-10-08: PASS)
-architecture/        threat-model.md
-tests/               logic · persistence · protocol · tool calls · authorization · configuration ·
-                     google_oidc_simulated
+deployment/          deploy / verify / demo / cleanup scripts · tools/ (verify helpers) · RESULTS.md
+deployment/poc/      Cloud Run token-forwarding proof-of-concept · RESULTS.md
+architecture/        system-design.md · threat-model.md
+demo/                walkthrough.md · expected-results.md (test evidence)
+tests/               local + simulated suites · integration/ (live, opt-in)
 ```
 
-The design is specified in [SPEC.md](SPEC.md), as amended by
+The original requirements are in [SPEC.md](SPEC.md) and
 [SPEC-AMENDMENT-1.md](SPEC-AMENDMENT-1.md).
+
+## License
+
+[MIT](LICENSE). Built on the official [MCP Python SDK](https://github.com/modelcontextprotocol/python-sdk)
+and [google-auth](https://github.com/googleapis/google-auth-library-python).
+Deployment approach informed by Google's
+[secure MCP server codelab](https://codelabs.developers.google.com/secure-mcp-server-gcp)
+and [Cloud Run service-to-service authentication](https://cloud.google.com/run/docs/authenticating/service-to-service).
+All company names, products, suppliers and warehouses are fictional.

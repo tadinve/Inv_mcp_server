@@ -1,6 +1,7 @@
 [project]
 name = "inventory-mcp"
 version = "0.1.0"
+license = "MIT"
 description = "Secure MCP server reference implementation for synthetic Cresenta inventory data"
 requires-python = ">=3.13"
 dependencies = [

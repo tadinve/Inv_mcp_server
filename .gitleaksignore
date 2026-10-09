@@ -1,0 +1,8 @@
+# Reviewed gitleaks findings in published history. All are deliberately fake test fixtures,
+# not credentials: unsigned or dummy-signed JWTs that tests use to prove rejection and leak
+# detection. Current files build these at runtime, so new findings are real findings.
+#   test_authorization.py:138     header {"alg":"none"}, payload {"sub":"dev:writer"}, no signature
+#   test_deployment_tools.py:104/202  header {"alg":"RS256"}, payload {"sub":"1234567890"}, signature b"signature"
+3bb7b3cf9484cab260eb8a3dff215d16bb5a3330:tests/test_authorization.py:jwt:138
+1f15ee7a40a8dbcb2f38612c3f4bb1cf59142d5b:tests/test_deployment_tools.py:jwt:104
+1f15ee7a40a8dbcb2f38612c3f4bb1cf59142d5b:tests/test_deployment_tools.py:jwt:202

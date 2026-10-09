@@ -19,3 +19,6 @@ var/
 *.pem
 *-key.json
 service-account*.json
+
+# OS noise
+.DS_Store

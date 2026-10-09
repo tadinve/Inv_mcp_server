@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 import copy
 import json
 import subprocess
@@ -12,6 +13,14 @@ import pytest
 from tests.conftest import REPO_ROOT
 
 TOOLS = REPO_ROOT / "deployment" / "tools"
+
+
+def _b64url(data: bytes) -> str:
+    return base64.urlsafe_b64encode(data).rstrip(b"=").decode()
+
+
+# A dummy-signed JWT built at runtime (not a literal) so secret scanners only flag real tokens.
+FAKE_JWT = ".".join([_b64url(b'{"alg":"RS256"}'), _b64url(b'{"sub":"1234567890"}'), _b64url(b"signature-not-real")])
 POLICY = json.dumps({"principals": [{"subject": "1", "permissions": []}, {"subject": "2", "permissions": []}]})
 GOOD = {
     "metadata": {
@@ -101,7 +110,7 @@ def test_summarize_logs_counts_events_and_finds_no_tokens() -> None:
 
 
 def test_summarize_logs_fails_when_a_token_is_logged() -> None:
-    leaked = "eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.c2lnbmF0dXJl"
+    leaked = FAKE_JWT
     result = _run("summarize_logs.py", [{"textPayload": f"Authorization: Bearer {leaked}"}])
     assert result.returncode == 1
     assert "JWT-like string: 1" in result.stdout
@@ -199,6 +208,6 @@ def test_log_check_fails_without_a_denial_when_required() -> None:
 
 
 def test_log_check_scans_platform_entries_for_tokens() -> None:
-    leaked = "eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.c2lnbmF0dXJl"
+    leaked = FAKE_JWT
     platform = {"httpRequest": {"status": 200}, "textPayload": f"Bearer {leaked}"}
     assert _logs([platform]).returncode == 1

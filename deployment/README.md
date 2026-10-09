@@ -1,6 +1,6 @@
 # Deploying the MCP server to Cloud Run (Checkpoint 3)
 
-**Status: prepared, NOT deployed.** Deployment needs explicit owner approval. The
+**Status: deployed and verified once (2026-10-08), see [RESULTS.md](RESULTS.md).** Each deployment needs explicit owner approval. The
 owner runs these scripts; Claude Code does not.
 
 Every script prints its plan with the resolved project, region and operator, and

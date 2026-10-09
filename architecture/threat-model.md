@@ -1,12 +1,13 @@
 # Threat model and trust boundaries
 
-Scope: the Cresenta inventory MCP server deployed on Cloud Run (Checkpoint 3
-design), plus local development. Status: authentication and authorization are
-implemented and tested locally. The Cloud Run assumptions are **unverified** until
-the token-forwarding PoC runs (`deployment/poc/`).
+Scope: the Cresenta inventory MCP server on Cloud Run, plus local development.
+Design and decisions are in [system-design.md](system-design.md).
 
-**Update (2026-10-08):** the PoC ran and passed. See
-[deployment/poc/RESULTS.md](../deployment/poc/RESULTS.md).
+**Status (2026-10-08):** implemented and verified at three levels. Each threat
+below names its evidence; the evidence levels are explained under "Evidence levels".
+- The Cloud Run token-forwarding PoC passed ([poc/RESULTS.md](../deployment/poc/RESULTS.md)).
+- The deployed MCP server passed all real-identity integration tests
+  ([deployment/RESULTS.md](../deployment/RESULTS.md)).
 
 ## Assets
 
@@ -101,3 +102,27 @@ the token-forwarding PoC runs (`deployment/poc/`).
    middleware reuses `FuncMetadata.validate_arguments`. A test pins the sanitized
    output, so an SDK upgrade that changes behavior fails CI rather than silently
    leaking values.
+
+## Evidence levels
+
+| Level | Meaning | Where |
+|---|---|---|
+| Local | Real server over real HTTP on localhost, dev or simulated authentication | `uv run pytest` (runs in CI) |
+| Simulated Google | Application verifier exercised with locally generated RSA keys standing in for Google | `tests/test_google_oidc_simulated.py` (runs in CI) |
+| Live Google | Real Google-signed tokens through real Cloud Run IAM to the deployed server | `tests/integration/` via `verify_cloud_run.sh` (manual, needs GCP; ran once, 2026-10-08) |
+| Not validated | Reasoned about, not tested | Listed below |
+
+## Residual risks and behavior not yet validated
+
+| Risk | Status |
+|---|---|
+| Stolen valid ID token replayed within its lifetime (up to 1 h) | Inherent to bearer tokens. Mitigated by short lifetimes, audience binding and the invoker boundary. No token binding |
+| No rate limiting or quotas | Not implemented. Only `--max-instances=1` and concurrency limits bound load |
+| Ephemeral storage | Restock requests and idempotency records are lost on scale to zero or instance replacement (by design for the demo) |
+| Multi-instance consistency | Not designed for it. More than one instance with SQLite would break idempotency across instances |
+| Google certificate endpoint outage beyond the cache lifetime | Fails closed (401), so it causes unavailability, not exposure. Not tested live |
+| Policy changes | Require a redeploy. There is no runtime policy administration (intentional) |
+| Unknown tool names echoed in SDK error text | Low risk; documented SDK behavior |
+| MCP clients that expect OAuth discovery | Cannot connect without custom headers. Out of scope (A2) |
+| Live verification ran once, on one lab project and region | Platform behavior could change. Re-run `verify_cloud_run.sh` on each deployment |
+| Identifiers in published history | The two published commits contain a temporary lab project number and two service-account unique IDs (not credentials) in `deployment/RESULTS.md`. They are redacted in the working tree. Removing them from history would need a rewrite and force-push |

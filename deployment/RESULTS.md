@@ -4,10 +4,11 @@
 - **Project:** a temporary Qwiklabs lab project
 - **Region:** `us-central1`
 - **Service / revision:** `cresenta-inventory` / `cresenta-inventory-00001-q6q`
-- **URL / audience / pinned host:** `https://cresenta-inventory-972256875165.us-central1.run.app`
+- **URL / audience / pinned host:** `https://cresenta-inventory-<PROJECT_NUMBER>.us-central1.run.app`
 - **Identities:** real Google service accounts, with ID tokens minted by impersonation. No keys, no simulated tokens.
-  - `mcp-reader`: uniqueId `117515356671842068589`, invoker, `inventory.read`
-  - `mcp-writer`: uniqueId `107858453125621748188`, invoker, `inventory.read` and `restock.create`
+- **Redaction:** the project number and service-account unique IDs are replaced with placeholders. The comparisons below were made against the real values.
+  - `mcp-reader`: uniqueId `<READER_UNIQUE_ID>`, invoker, `inventory.read`
+  - `mcp-writer`: uniqueId `<WRITER_UNIQUE_ID>`, invoker, `inventory.read` and `restock.create`
   - `mcp-outsider`: no invoker, no permissions
 
 ## 1. Deployed configuration (`verify_cloud_run.sh`, section 1)
@@ -48,7 +49,7 @@ Invoker bindings are exactly `mcp-reader` and `mcp-writer`: **PASS**.
 | 3. Writer baseline | count 4 (left by the integration tests on the same instance) | n/a |
 | 4. Reader creates request | `forbidden` | PASS |
 | 5. No mutation | Reader count 0, writer count still 4 | PASS |
-| 6. Writer creates request | `request_id f3fae1a5…`, `idempotent_replay: false`, `submitted_by 107858453125621748188` | PASS |
+| 6. Writer creates request | `request_id f3fae1a5…`, `idempotent_replay: false`, `submitted_by <WRITER_UNIQUE_ID>` | PASS |
 | 7. Same key again | Same `request_id`, `idempotent_replay: true` | PASS |
 | 8. No duplicate | Writer count 5 (+1) | PASS |
 | 9. Outsider | Rejected. The client showed the SDK's generic `-32603` wrapper rather than the HTTP status (see below) | PASS (presentation fixed) |
